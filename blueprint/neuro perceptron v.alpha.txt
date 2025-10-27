@@ -1,5 +1,4 @@
-A안.
-발화 통계의 자가안정과 단순 규칙 구현 설계.
+기본 설계
 
 [입력]
 - 특징 벡터: X1, X2, ..., Xd
@@ -18,6 +17,9 @@ A안.
 - 활성화: Y_g = f_g · Z,  g = 1..α
   (α: 현재 퍼셉트론의 출력이 연결되는 다음 퍼셉트론의 수)
 - 출력 벡터: Y = [Y_1, Y_2, ..., Y_α]
+
+A안.
+발화 통계의 자가안정과 단순 규칙 구현 설계.
 
 [학습/적응]
 - 표기: [u]_+ = max(u, 0),  clip(a,l,h)=min(max(a,l),h)
@@ -95,3 +97,99 @@ Z_ref, Y_ref    > 0        // 정규화 스케일
 β_r, β_m ∈ (0,1]          // EMA 계수
 r*, m* ∈ [0,1]            // 목표 발화율·강도
 η_SP > 0,  λ_r, λ_m ≥ 0   // SP 업데이트 계수
+
+---------------------------------------------------------------------------------
+
+아마도 최종이 될 퍼셉트론 기본 설계
+
+[입력]
+
+* 특징 벡터: X1, X2, ..., Xd
+* 선택: Index 경로(토큰 입력) tok ∈ {0..V−1}
+* 배치·시간 평탄화 축: b=1..B* (B*=B·T 또는 B)
+
+[가중합]
+
+* Dense: Z = Σ(k=1..d) X_k · w_k
+* Index: Z = W_tok  // tok에 해당하는 단일 열 가중치
+
+[발화 기준]
+
+* 발화 역치 SP
+
+[판정]
+
+* Z ≥ SP → 발화
+* Z < SP → 비발화 → f_g·Z 계산하지 않음(출력 없음)
+
+[발화한 경우의 출력/전달]
+
+* 활성화: Y_g = f_g · Z,  g = 1..α
+  (α: 현재 퍼셉트론의 출력이 연결되는 다음 퍼셉트론의 수)
+* 출력 벡터: Y = [Y_1, Y_2, ..., Y_α]
+
+[순전파]
+Z = {
+  Dense: Σ_k X_k · w_k
+  Index: W_tok
+}
+F = 1[ Z ≥ SP ]
+Y_g = F · f_g · Z    // g = 1..α
+
+[역전파]  // 상류 기울기 δ_g = ∂L/∂Y_g 가 주어졌다고 가정
+S = Σ_g (δ_g · f_g)
+
+∂L/∂f_g = δ_g · F · Z
+∂L/∂Z   = F · S
+∂L/∂w_k = (∂L/∂Z) · X_k = F · S · X_k
+// Dense: ∂L/∂X_k = F · S · w_k
+// Index: 입력이 정수(tok)라 ∂L/∂X_k = 0,  X_k=1(k=tok),0(그 외) ⇒ ∂L/∂W_tok = F · S
+
+업데이트 집합 마스크(M_W, M_f):
+
+* M_W, M_f ∈ {all, active, inactive},  active = (배치 평균 F>0인 뉴런)
+* 행별 적용(⊙row):
+    (∂L/∂w_k) ← (M_W ⊙row) · (∂L/∂w_k),    (∂L/∂f_g) ← (M_f ⊙row) · (∂L/∂f_g)
+
+// 선택적 STE: F를 F+STE(U−SP)로 대체 가능. 이때 ∂L/∂SP ≠ 0.
+
+[업데이트]
+clip(a,l,h) = min(max(a,l), h)
+안정화 상수: ε_Z>0, ε_Y>0,  Z_ref2 = Z_ref^2+ε_Z,  Y_ref2 = Y_ref^2+ε_Y
+
+1. 입력 가중치 w_k  (역전파 + Oja 정규화, 발화 시만)
+   Δw_k(bp)  = − η_bp,w · (∂L/∂w_k)
+   Δw_k(oja) =  F · η_w · ( Z · X_k  −  (Z^2 / Z_ref2) · w_k )
+   w_k ← clip( w_k + (M_W ⊙row)·Δw_k(bp) + Δw_k(oja),  w_min, w_max )
+
+// Index 특기: k=tok에서만 갱신. 즉
+ΔW_tok(bp)  = − η_bp,w · (F · S)
+ΔW_tok(oja) =   F · η_w · ( Z · 1 − (Z^2 / Z_ref2) · W_tok )
+
+2. 출력 가중치 f_g  (역전파 + Oja 정규화, 발화 시만)
+   Δf_g(bp)  = − η_bp,f · (∂L/∂f_g)  = − η_bp,f · (δ_g · F · Z)
+   Δf_g(oja) =   F · η_f · ( Y_g · Z  −  (Y_g^2 / Y_ref2) · f_g )
+   f_g ← clip( f_g + (M_f ⊙row)·Δf_g(bp) + Δf_g(oja),  f_min, f_max )
+
+3. 발화 역치 SP  (횟수·강도 기반 홈오스테틱)
+   r_t = F                           // 발화 “횟수”
+   m_t = F · [ (Z − SP) / (Z_ref + ε_Z) ]_+  // 발화 “강도”(여유 마진)
+
+\bar r ← (1−β_r)·\bar r + β_r·r_t
+\bar m ← (1−β_m)·\bar m + β_m·m_t
+
+SP ← clip( SP + η_SP · ( λ_r·(\bar r − r*)  +  λ_m·(\bar m − m*) ),  SP_min, SP_max )
+
+[파라미터]
+η_bp,w, η_bp,f  > 0        // 역전파 학습률
+η_w, η_f        > 0        // Oja 국소항 학습률
+w_min, w_max    // 가중치 범위. 기본 0, w_max. 음수 허용 시 w_min = −w_max
+f_min, f_max    // 출력 가중치 범위. 기본 0, f_max. 음수 허용 시 f_min = −f_max
+Z_ref, Y_ref    > 0        // 정규화 스케일
+ε_Z, ε_Y        > 0        // 분모 안정화
+β_r, β_m ∈ (0,1]          // EMA 계수
+r*, m* ∈ [0,1]            // 목표 발화율·강도
+η_SP > 0,  λ_r, λ_m ≥ 0   // SP 업데이트 계수
+SP_min < SP_max           // SP 클리핑 범위
+
+// 구현 규칙: Oja·EMA 계산은 fp32, U/F/Y는 detach 스냅샷 사용. Dense/Index 모두 위 식에 따름.
