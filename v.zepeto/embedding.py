@@ -11,7 +11,7 @@ import torch
 from torch import Tensor, nn
 
 from cepta_ssm import CeptaSSMLowRank
-from perceptron_cepta import CeptaConfig, CeptaEmbedding
+from perceptron_cepta import CeptaConfig, CeptaEmbedding, CeptaRouting
 
 
 def _dtype_from_str(name: str) -> torch.dtype:
@@ -26,9 +26,9 @@ def _dtype_from_str(name: str) -> torch.dtype:
 @dataclass
 class CeptaEmbeddingConfig:
     vocab_size: int
-    P: int
-    alpha: int
-    P_r: int
+    P: int  # number of paths
+    alpha: int  # fan-out per neuron
+    P_r: int  # low-rank state dim
     d_model: int
     max_seq_len: int
     dtype_store: str = "fp32"
@@ -82,17 +82,22 @@ class CeptaTokenEmbedding(nn.Module):
         )
         self.cepta = CeptaEmbedding(cepta_cfg)
         self.ssm = CeptaSSMLowRank(P=cfg.P, P_r=cfg.P_r)
+        self.router = CeptaRouting(reduce="sum")
         self.to_hidden = nn.Linear(cfg.P, cfg.d_model, bias=False)
         self.pos_enc = SinusoidalPositionalEncoding(cfg.d_model, max_len=cfg.max_seq_len)
 
-    def forward(self, input_ids: Tensor) -> Tuple[Tensor, Dict[str, Tensor]]:
+    def forward(
+        self, input_ids: Tensor, return_pack: bool = True
+    ) -> Tuple[Tensor, Dict[str, Tensor]]:
         if input_ids.dim() != 2:
             raise ValueError("input_ids must be (B, T).")
         U, F, Y = self.cepta(input_ids=input_ids)
-        t = F * U
+        # Aggregate fan-out outputs as the path signal
+        t = self.router(Y)
         t_tilde, _ = self.ssm(t, F=F)
         x = self.to_hidden(t_tilde)
         x = self.pos_enc(x)
         pack = {"U": U, "F": F, "t": t, "t_tilde": t_tilde, "Y": Y}
+        if return_pack:
+            pack["input_ids"] = input_ids
         return x, pack
-

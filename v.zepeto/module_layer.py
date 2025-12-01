@@ -57,19 +57,23 @@ class CeptaContextBlock(nn.Module):
             use_index=False,
         )
         self.cepta_dense = CeptaEmbedding(cepta_cfg)
+        self.router = CeptaRouting(reduce="sum")
         self.ssm = CeptaSSMLowRank(P=P, P_r=P_r)
         self.from_P = nn.Linear(P, d_model, bias=False)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, return_pack: bool = False):
         if x.dim() != 3:
             raise ValueError("Input to CeptaContextBlock must be (B, T, D).")
         pre_path = self.to_P(x)
         U, F, Y = self.cepta_dense(X_dense=x)
-        t = F * U + pre_path
+        t = self.router(Y) + pre_path
         t_tilde, _ = self.ssm(t, F=F)
         h = self.from_P(t_tilde)
         h = self.dropout(h)
+        if return_pack:
+            pack = {"U": U, "F": F, "Y": Y, "t": t, "t_tilde": t_tilde, "X_dense": x}
+            return h, pack
         return h
 
 
@@ -83,7 +87,7 @@ class CeptaTransformerBlock(nn.Module):
         alpha: int,
         P_r: int,
         dropout: float = 0.0,
-        mlp_multiple: float = 4.0,
+        mlp_multiple: float = 16.0,
     ):
         super().__init__()
         self.norm1 = RMSNorm(d_model)
@@ -92,9 +96,13 @@ class CeptaTransformerBlock(nn.Module):
         self.mlp = FeedForward(d_model, multiple=mlp_multiple, dropout=dropout)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, return_pack: bool = False):
         h1 = self.norm1(x)
-        y = self.context(h1)
+        ctx_out = self.context(h1, return_pack=return_pack)
+        if return_pack:
+            y, ctx_pack = ctx_out
+        else:
+            y = ctx_out
         y = self.dropout(y)
         x = x + y
 
@@ -102,6 +110,8 @@ class CeptaTransformerBlock(nn.Module):
         z = self.mlp(h2)
         z = self.dropout(z)
         x = x + z
+        if return_pack:
+            return x, {"context": ctx_pack}
         return x
 
 
@@ -119,7 +129,7 @@ class CeptaTransformerLM(nn.Module):
                     alpha=emb_cfg.alpha,
                     P_r=emb_cfg.P_r,
                     dropout=0.0,
-                    mlp_multiple=4.0,
+                    mlp_multiple=16.0,
                 )
                 for _ in range(n_layers)
             ]
@@ -128,12 +138,21 @@ class CeptaTransformerLM(nn.Module):
         self.lm_head = nn.Linear(emb_cfg.d_model, emb_cfg.vocab_size, bias=False)
 
     def forward(
-        self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None
-    ) -> torch.Tensor:
-        x, _ = self.embedding(input_ids)
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        return_packs: bool = False,
+    ):
+        x, emb_pack = self.embedding(input_ids, return_pack=return_packs)
+        packs = {"embedding": emb_pack, "blocks": []} if return_packs else None
         for block in self.blocks:
-            x = block(x)
+            if return_packs:
+                x, blk_pack = block(x, return_pack=True)
+                packs["blocks"].append(blk_pack)
+            else:
+                x = block(x, return_pack=False)
         x = self.final_norm(x)
         logits = self.lm_head(x)
+        if return_packs:
+            return logits, packs
         return logits
-

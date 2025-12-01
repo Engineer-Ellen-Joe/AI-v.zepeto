@@ -8,6 +8,7 @@ row-wise update masks, and local Oja-style updates plus SP homeostasis helpers.
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Literal, Optional, Tuple
+import math
 
 import torch
 from torch import Tensor, nn
@@ -260,8 +261,15 @@ class CeptaEmbedding(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        nn.init.xavier_uniform_(self.W)
-        nn.init.xavier_uniform_(self.f)
+        # Positive-only initialization to respect non-negative weight clipping.
+        if self.cfg.use_index:
+            scale_w = math.sqrt(6.0 / max(1.0, self.cfg.d_or_vocab))
+        else:
+            scale_w = math.sqrt(6.0 / max(1.0, self.cfg.d_or_vocab))
+        nn.init.uniform_(self.W, 0.0, scale_w)
+
+        scale_f = math.sqrt(6.0 / max(1.0, self.cfg.alpha))
+        nn.init.uniform_(self.f, 0.0, scale_f)
         nn.init.zeros_(self.SP)
 
     @property
@@ -410,9 +418,9 @@ def update_cepta_local(
         "lambda_m": 1.0,
         "sp_min": -1e3,
         "sp_max": 1e3,
-        "w_min": -1e3,
+        "w_min": 0.0,
         "w_max": 1e3,
-        "f_min": -1e3,
+        "f_min": 0.0,
         "f_max": 1e3,
         "z_ref": 1.0,
         "y_ref": 1.0,
@@ -487,7 +495,7 @@ def update_cepta_local(
             ).sum(dim=0)
             df_total += oja_f
 
-        # Apply masks and clipping
+        # Apply masks and clipping (non-negative as in base spec)
         dW_applied = (dW_total.t() * M_W).t()
         df_applied = (df_total.t() * M_f).t()
         W.data.copy_(
