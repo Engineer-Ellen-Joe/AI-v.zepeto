@@ -1,16 +1,16 @@
 ````markdown
 # CEPTA-based Transformer Language Model
 
-A project to experiment with a CEPTA-based Transformer language model using DeepSeek-V3 talknizer.
+A project to experiment with a CEPTA-based Transformer language model using DeepSeek-V3 tokenizer.
 Combining path-specific perceptron (CEPTA) and low-rank state space model (SSM)-based time series mixer, language modeling is performed with lightweight context modules instead of traditional attention.
 
 ---
 
 ## Key components
 
-### 1. Talk Nizer
+### 1. Tokenizer
 
-- Use 'deepseek-ai/deepseek-V3' talk nizer
+- Use 'deepseek-ai/deepseek-V3' tokenizer
 - Securely initialize padding tokens and padding side settings
 - Provide batch encoding and decoding utility
 
@@ -152,24 +152,7 @@ For PyTorch installation options (such as CUDA version), you should refer to the
 
 ## Data preparation
 
-By default, 'train_test.py' expects the following directories:
-
-```text
-Z:/Final_project/data_set/After_aling
-```
-
-Read all '.txt' files under that directory in sorted name order and attach them to a single token sequence.
-Example:
-
-```text
-After_aling/ 
-01.txt 
-02.txt 
-03.txt 
-...
-```
-
-If you want to use a different path, you can change it through the '--data_dir' factor.
+You can train through the '--data_dir' factor.
 
 ```bash
 python train_test.py --data_dir path/to/your_dataset
