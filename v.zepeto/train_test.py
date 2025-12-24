@@ -1,11 +1,3 @@
-"""
-Training and testing script for the CEPTA-based Transformer LM.
-
-Dataset:
-    Expects text files located under Z:\\Final_project\\data_set\\After_aling
-    named 01.txt ... 07.txt. Files are concatenated and tokenized, then split
-    into contiguous blocks for language modeling.
-"""
 from __future__ import annotations
 
 import argparse
@@ -24,7 +16,6 @@ from dataset_after_aling import ChunkedLMDataset, read_files, tokenize_texts
 
 
 def build_custom_order() -> List[str]:
-    """20.txt -> 11.txt -> 19.txt -> 12.txt ... -> 16.txt -> 15.txt."""
     order: List[str] = []
     lo = 11
     hi = 20
