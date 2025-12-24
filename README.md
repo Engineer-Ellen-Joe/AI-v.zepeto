@@ -14,7 +14,7 @@ Combining path-specific perceptron (CEPTA) and low-rank state space model (SSM)-
 - Securely initialize padding tokens and padding side settings
 - Provide batch encoding and decoding utility
 
-python
+```python
 from tokenizer import get_deepseek_v3_tokenizer
 
 tokenizer = get_deepseek_v3_tokenizer()
